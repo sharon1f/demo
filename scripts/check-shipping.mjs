@@ -27,20 +27,31 @@ async function setDeliveryToIsrael(page) {
   await dropdown.waitFor({ state: 'visible', timeout: 15_000 });
   await dropdown.click();
 
-  // Try the country code first, then the visible text "Israel"
-  const israel = page
-    .locator(`a[data-value*='"IL"']`)
-    .or(page.getByRole('option', { name: 'Israel' }))
-    .or(page.locator('.a-dropdown-link', { hasText: /^\s*Israel\s*$/ }))
+  // 1) Click the visible link in the custom dropdown list (not the hidden native <option>)
+  const israelLink = page
+    .locator('a.a-dropdown-link:visible')
+    .filter({ hasText: /^\s*Israel\s*$/ })
     .first();
 
   try {
-    await israel.click({ timeout: 10_000 });
-  } catch (err) {
-    const options = await page.locator('.a-dropdown-link, [role="option"]').allInnerTexts();
-    console.log('Country options seen:', options.slice(0, 20).join(' | '));
-    throw err;
+    await israelLink.click({ timeout: 8_000 });
+  } catch {
+    // 2) Fallback: set the hidden native <select> directly and fire a change event
+    console.log('Visible Israel link not found, setting the native select instead');
+    const ok = await page.evaluate(() => {
+      const sel = document.querySelector('#GLUXCountryList');
+      if (!sel) return false;
+      sel.value = 'IL';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return sel.value === 'IL';
+    });
+    if (!ok) throw new Error('Could not select Israel in the country list');
   }
+
+  console.log(
+    'Dropdown now shows:',
+    (await page.locator('#GLUXCountryListDropdown').innerText().catch(() => '?')).trim(),
+  );
 
   await page
     .locator('button[name="glowDoneButton"], #GLUXConfirmClose')
