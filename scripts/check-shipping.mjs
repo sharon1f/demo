@@ -53,11 +53,33 @@ async function setDeliveryToIsrael(page) {
     (await page.locator('#GLUXCountryListDropdown').innerText().catch(() => '?')).trim(),
   );
 
-  await page
-    .locator('button[name="glowDoneButton"], #GLUXConfirmClose')
-    .or(page.getByRole('button', { name: 'Done' }))
-    .first()
-    .click({ timeout: 10_000 });
+  // Click the VISIBLE "Done" button (the #GLUXConfirmClose input is hidden on this screen)
+  const done = page
+    .locator('.a-popover-wrapper .a-button-text:visible')
+    .filter({ hasText: /^\s*Done\s*$/ })
+    .first();
+
+  try {
+    await done.click({ timeout: 8_000 });
+  } catch {
+    const visibleButtons = await page.locator('.a-popover-wrapper .a-button-text:visible').allInnerTexts();
+    console.log('Visible Done button not found. Visible popup buttons:', visibleButtons.join(' | '));
+
+    // Fallback: trigger the known Done/confirm inputs directly
+    const clicked = await page.evaluate(() => {
+      const selectors = ['#GLUXCountryChangeButton input', 'input[name="glowDoneButton"]', '#GLUXConfirmClose'];
+      for (const s of selectors) {
+        const el = document.querySelector(s);
+        if (el) {
+          el.click();
+          return s;
+        }
+      }
+      return null;
+    });
+    if (!clicked) throw new Error('Could not find a Done button in the location popup');
+    console.log('Clicked via JS:', clicked);
+  }
   await page.waitForLoadState('domcontentloaded');
 }
 
