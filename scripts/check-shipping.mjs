@@ -22,10 +22,31 @@ async function notify(text) {
 
 async function setDeliveryToIsrael(page) {
   await page.locator('#nav-global-location-popover-link').click();
-  await page.locator('#GLUXCountryListDropdown').click();
-  // Country list items carry the country code in data-value, e.g. {"stringVal":"IL"}
-  await page.locator('a[data-value*="\\"IL\\""]').first().click();
-  await page.locator('button[name="glowDoneButton"], #GLUXConfirmClose, .a-popover-footer button').first().click();
+
+  const dropdown = page.locator('#GLUXCountryListDropdown');
+  await dropdown.waitFor({ state: 'visible', timeout: 15_000 });
+  await dropdown.click();
+
+  // Try the country code first, then the visible text "Israel"
+  const israel = page
+    .locator(`a[data-value*='"IL"']`)
+    .or(page.getByRole('option', { name: 'Israel' }))
+    .or(page.locator('.a-dropdown-link', { hasText: /^\s*Israel\s*$/ }))
+    .first();
+
+  try {
+    await israel.click({ timeout: 10_000 });
+  } catch (err) {
+    const options = await page.locator('.a-dropdown-link, [role="option"]').allInnerTexts();
+    console.log('Country options seen:', options.slice(0, 20).join(' | '));
+    throw err;
+  }
+
+  await page
+    .locator('button[name="glowDoneButton"], #GLUXConfirmClose')
+    .or(page.getByRole('button', { name: 'Done' }))
+    .first()
+    .click({ timeout: 10_000 });
   await page.waitForLoadState('domcontentloaded');
 }
 
