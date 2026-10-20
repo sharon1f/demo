@@ -80,7 +80,22 @@ async function setDeliveryToIsrael(page) {
     if (!clicked) throw new Error('Could not find a Done button in the location popup');
     console.log('Clicked via JS:', clicked);
   }
-  await page.waitForLoadState('domcontentloaded');
+  // Amazon reloads the page itself after "Done": let that finish before navigating again
+  await page.waitForTimeout(3_000);
+  await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
+}
+
+async function gotoWithRetry(page, url, attempts = 3) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      return;
+    } catch (err) {
+      if (i === attempts || !/ERR_ABORTED/.test(String(err))) throw err;
+      console.log(`goto aborted (attempt ${i}), retrying...`);
+      await page.waitForTimeout(3_000);
+    }
+  }
 }
 
 const browser = await chromium.launch();
@@ -104,7 +119,7 @@ try {
     details = 'Amazon showed a captcha / robot check.';
   } else {
     await setDeliveryToIsrael(page);
-    await page.goto(PRODUCT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await gotoWithRetry(page, PRODUCT_URL);
 
     const title = (await page.locator('#productTitle').textContent().catch(() => ''))?.trim();
     const deliveryText = (
