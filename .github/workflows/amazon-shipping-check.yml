@@ -2,7 +2,7 @@ name: Amazon free shipping check
 
 on:
   schedule:
-    - cron: '30 11 * * *'    
+    - cron: '0 6 * * *'    
   workflow_dispatch:       # allows manual run from the Actions tab
 
 jobs:
