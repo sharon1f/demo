@@ -6,7 +6,6 @@ import fs from 'node:fs';
 const PRODUCT_URL = process.env.PRODUCT_URL;           // e.g. https://www.amazon.com/dp/B0XXXXXXX
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;       // optional
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID;          // optional
-const NOTIFY_ALWAYS = process.env.NOTIFY_ALWAYS === 'true'; // true = message every day
 
 if (!PRODUCT_URL) throw new Error('PRODUCT_URL is not set');
 
@@ -85,10 +84,23 @@ async function setDeliveryToIsrael(page) {
   await page.waitForLoadState('load', { timeout: 30_000 }).catch(() => {});
 }
 
+// Amazon sometimes shows "Click the button below to continue shopping" before the page
+async function passInterstitial(page) {
+  for (let i = 0; i < 2; i++) {
+    const btn = page.getByRole('button', { name: /continue shopping/i });
+    if ((await btn.count()) === 0) return;
+    console.log('Amazon interstitial detected, clicking "Continue shopping"');
+    await btn.first().click();
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    await page.waitForTimeout(2_000);
+  }
+}
+
 async function gotoWithRetry(page, url, attempts = 3) {
   for (let i = 1; i <= attempts; i++) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+      await passInterstitial(page);
       return;
     } catch (err) {
       if (i === attempts || !/ERR_ABORTED/.test(String(err))) throw err;
@@ -108,15 +120,21 @@ const page = await context.newPage();
 
 let status = 'UNKNOWN';
 let details = '';
+let productName = '';
 
 try {
-  await page.goto(PRODUCT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await gotoWithRetry(page, PRODUCT_URL);
 
   // Bot-check / captcha detection
-  const html = await page.content();
-  if (/captcha|Enter the characters you see below|Robot Check/i.test(html)) {
+  const pageTitle = await page.title();
+  console.log('First page title:', pageTitle);
+  const isCaptcha =
+    (await page.locator('form[action*="validateCaptcha"], input#captchacharacters').count()) > 0 ||
+    /Robot Check|Sorry! Something went wrong/i.test(pageTitle);
+
+  if (isCaptcha) {
     status = 'BLOCKED';
-    details = 'Amazon showed a captcha / robot check.';
+    details = `Amazon showed a captcha / robot check (page title: ${pageTitle}).`;
   } else {
     await setDeliveryToIsrael(page);
     await gotoWithRetry(page, PRODUCT_URL);
@@ -130,6 +148,7 @@ try {
       .join('\n')
       .replace(/\s+/g, ' ');
 
+    productName = title || '';
     details = `${title || PRODUCT_URL}\n${deliveryText.slice(0, 400)}`;
 
     if (/cannot be shipped|does not ship to|not available for delivery/i.test(deliveryText)) {
@@ -149,12 +168,23 @@ try {
   await browser.close();
 }
 
-const message = `Amazon shipping check: ${status}\n${details}\n${PRODUCT_URL}`;
+const shortName = (productName || 'the product').slice(0, 80);
+const headlines = {
+  FREE_SHIPPING: `✅ FREE shipping to Israel is available!\n${shortName}`,
+  PAID_SHIPPING: `❌ NOT free shipping to Israel.\nThe product ships to Israel, but shipping is not free.\n${shortName}`,
+  NOT_SHIPPABLE: `❌ This product does NOT ship to Israel.\n${shortName}`,
+  UNKNOWN: `⚠️ Could not determine the shipping status.\nThe page loaded, but no delivery info for Israel was found.`,
+  BLOCKED: `⚠️ Amazon blocked the check today.\nNothing could be verified.`,
+  ERROR: `⚠️ The check failed with an error.`,
+};
 
-if (status === 'FREE_SHIPPING' || status === 'BLOCKED' || status === 'ERROR' || NOTIFY_ALWAYS) {
-  await notify(message);
-} else {
-  console.log(message);
-}
+const message = [
+  headlines[status] ?? `Amazon shipping check: ${status}`,
+  status === 'FREE_SHIPPING' ? '' : `\nDetails: ${details.slice(0, 500)}`,
+  `\n${PRODUCT_URL}`,
+].join('\n');
+
+// Always send a message, so you get a clear answer every day
+await notify(message);
 
 if (status === 'ERROR') process.exit(1);
